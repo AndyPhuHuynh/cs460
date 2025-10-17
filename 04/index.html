@@ -6,7 +6,8 @@
         <style>
             html,
             body {
-                background-color: #000;
+                background-image: url("bg.jpg");
+                background-size: cover;
                 margin: 0;
                 padding: 0;
                 height: 100%;
@@ -27,17 +28,14 @@
     <script id="vertexshader" type="glsl">
         attribute vec3 a_position;
 
-        uniform vec3 u_offset;
+        uniform float u_pointSize;
+        uniform mat4 u_transform;
 
         void main(void) {
+            vec4 final_position = u_transform * vec4(a_position, 1.0);
 
-          vec3 final_position = a_position;
-          final_position.x += u_offset.x;
-          final_position.y += u_offset.y;
-          final_position.z += u_offset.z;
-
-          gl_Position = vec4( final_position, 1.);
-
+            gl_Position = final_position;
+            gl_PointSize = u_pointSize;
         }
     </script>
 
@@ -56,7 +54,13 @@
     <script>
         let gl;
         let shaderprogram;
-        let fish = [];
+
+        let a_position;
+        let u_color;
+        let u_pointSize;
+        let u_transform;
+
+        let fishes = [];
 
         const initShadersAndProgram = () => {
             const c = document.getElementById("c"); // setup canvas
@@ -73,14 +77,14 @@
             gl.shaderSource(v_shader, document.getElementById("vertexshader").innerText);
             gl.compileShader(v_shader);
             if (!gl.getShaderParameter(v_shader, gl.COMPILE_STATUS)) {
-                console.log(gl.getShaderInfoLog(v_shader));
+                console.log(`Vertex shader compile errror: ${gl.getShaderInfoLog(v_shader)}`);
             }
 
             // compile fragment shader
             gl.shaderSource(f_shader, document.getElementById("fragmentshader").innerText);
             gl.compileShader(f_shader);
             if (!gl.getShaderParameter(f_shader, gl.COMPILE_STATUS)) {
-                console.log(gl.getShaderInfoLog(f_shader));
+                console.log(`Fragment shader compile errror: ${gl.getShaderInfoLog(f_shader)}`);
             }
 
             // attach and link the shaders
@@ -89,28 +93,27 @@
             gl.attachShader(shaderprogram, f_shader);
             gl.linkProgram(shaderprogram);
             gl.useProgram(shaderprogram);
+
+            a_position  = gl.getAttribLocation(shaderprogram, "a_position");
+            u_color     = gl.getUniformLocation(shaderprogram, "u_color");
+            u_pointSize = gl.getUniformLocation(shaderprogram, "u_pointSize");
+            u_transform = gl.getUniformLocation(shaderprogram, "u_transform");
         }
 
         window.onload = function () {
             initShadersAndProgram();
-            fish.push(
-                createFish(
-                    new Float32Array([-0.2, -0.2, 0]),
-                    new Float32Array([1, 1, 1, 1])
-                )
-            );
-            fish.push(
-                createFish(
-                    new Float32Array([0, 0, 0]),
-                    new Float32Array([1, 0, 0, 1])
-                )
-            );
-
+            for (let i = 0; i < 100; i++) {
+                const random_color  = [Math.random(), Math.random(), Math.random(), Math.random()];
+                const random_offset = [Math.random() - Math.random(), Math.random() - Math.random(), 0];
+                const random_scale  = Math.random() * 0.3;
+                fishes.push(createFish(random_offset, random_color, random_scale, 1))
+            }
+            fishes.push(createFish([0, 0, 0], [1, 0, 0, 1], 1, -1, true));
             animate();
         };
 
-        function createFish(offset, color, scale = 1, direction = 1) {
-            vertices = new Float32Array([
+        function createFish(offset, color, scale = 1, direction = 1, isMain = false) {
+            const vertices = new Float32Array([
                  0.5,  0.0,  0.0, // 0: nose
                  0.2,  0.25, 0.0, // 1: upper body
                 -0.2,  0.15, 0.0, // 2: upper tail base
@@ -119,7 +122,7 @@
                 -0.2, -0.15, 0.0, // 5: lower tail base
                  0.2, -0.25, 0.0  // 6: lower body
             ]);
-            indices = new Uint8Array([
+            const indices = new Uint8Array([
                 0, 1, 6, // main body
                 1, 2, 6, // upper mid-body
                 2, 5, 6, // rear body
@@ -127,29 +130,93 @@
                 3, 4, 5  // tail fin
             ]);
 
-            let vbo = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+            const body_vbo = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, body_vbo);
             gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
-            let ebo = gl.createBuffer();
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+            const body_ebo = gl.createBuffer();
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, body_ebo);
             gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
             gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
 
+            const eye_vertices =  direction == -1 ? 
+                new Float32Array([0.2, -0.2, 0.0]) :
+                new Float32Array([0.2, 0.2, 0.0]);
+
+            const eye_vbo = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, eye_vbo);
+            gl.bufferData(gl.ARRAY_BUFFER, eye_vertices, gl.STATIC_DRAW);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
             return {
-                vbo: vbo,
-                ebo: ebo,
+                body_vbo: body_vbo,
+                body_ebo: body_ebo,
+                eye_vbo: eye_vbo,
                 offset: offset,
                 color: color,
                 scale: scale,
-                direction: direction
+                direction: direction,
+                isMain: isMain
             }
         }
 
-        var step_x = 0.01;
-        var step_y = 0.01;
-        var direction = -1;
+        const moveFish = (fish) => {
+            fish.offset[0] += 0.01 * fish.direction;
+            fish.offset[1] += 0.01 * Math.random();
+            fish.offset[1] -= 0.01 * Math.random();
+            if (fish.direction == 1 && fish.offset[0] >= 1) {
+                fish.offset[0] = -1;
+            } else if (fish.direction == -1 && fish.offset[0] <= - 1) {
+                fish.offset[0] = 1;
+            }
+        }
+
+        const drawBody = (fish) => {
+            gl.bindBuffer(gl.ARRAY_BUFFER, fish.body_vbo);
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, fish.body_ebo);
+
+            gl.vertexAttribPointer(a_position, 3, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(a_position);
+
+            const theta = Math.random() * 10 * Math.PI / 100;
+            const transform = [
+                fish.direction * fish.scale * Math.cos(theta),  Math.sin(theta), 0, 0,
+                -Math.sin(theta), fish.direction * fish.scale * Math.cos(theta), 0, 0,
+                0, 0, fish.direction * fish.scale, 0,
+                fish.offset[0], fish.offset[1], fish.offset[2], 1
+            ];
+            gl.uniformMatrix4fv(u_transform, false, new Float32Array(transform));
+
+            const t = performance.now();
+            const a = 0.6 + 0.4 * Math.sin(t * 2.0);
+            let color = new Float32Array([
+                fish.color[0] * (0.3 + 0.2 * Math.sin(t + 0.0)),
+                fish.color[1] * (0.6 + 0.2 * Math.sin(t + 2.0)),
+                fish.color[2] * (0.9 + 0.1 * Math.sin(t + 4.0)),
+                a
+            ]);
+            
+
+            if (fish.isMain) {
+                color = [1.0, 0.0, 0.0, 0.7];
+            }
+            gl.uniform4fv(u_color, color);
+
+            gl.drawElements(gl.TRIANGLES, 15, gl.UNSIGNED_BYTE, 0);
+        }
+
+        const drawEye = (fish) => {
+            gl.bindBuffer(gl.ARRAY_BUFFER, fish.eye_vbo);
+
+            gl.vertexAttribPointer(a_position, 3, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(a_position);
+
+            gl.uniform4fv(u_color, new Float32Array([0, 0, 0, 0.5]));
+            gl.uniform1f(u_pointSize, fish.scale * 20);
+
+            gl.drawArrays(gl.POINTS, 0, 1);
+        }
 
         function animate() {
             requestAnimationFrame(animate);
@@ -157,57 +224,17 @@
             gl.clearColor(0, 0, 0, 0);
             gl.clear(gl.COLOR_BUFFER_BIT);
 
-            for (var r = 0; r < fish.length; r++) {
-                // current_buffers is a list of [v_buffer, i_buffer]-pairs
-                var current_buffers = fish[r];
-                var current_v_buffer = current_buffers.vbo;
-                var current_i_buffer = current_buffers.ebo;
-                var current_offset = current_buffers.offset;
-                var current_color = current_buffers.color;
+            gl.enable(gl.BLEND);
+            gl.blendEquation(gl.FUNC_ADD);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.disable(gl.DEPTH_TEST)
+    
+            for (let r = 0; r < fishes.length; r++) {
+                let fish = fishes[r];
 
-                // update offsets
-                // if (current_offset[0] <= -1) {
-                //     // bumped into left end of screen
-                //     direction = 1;
-                // } else if (current_offset[0] >= 1) {
-                //     // bumped into right end of screen
-                //     direction = -1;
-                // }
-                // current_offset[0] += direction * step_x;
-
-                // if (current_offset[1] <= -1) {
-                //     // bumped into left end of screen
-                //     direction = 1;
-                // } else if (current_offset[1] >= 1) {
-                //     // bumped into right end of screen
-                //     direction = -1;
-                // }
-                // current_offset[1] += direction * step_y;
-
-                //************************************************************//
-                //
-                // CONNECT SHADER WITH GEOMETRY
-                //
-
-                gl.bindBuffer(gl.ARRAY_BUFFER, current_v_buffer);
-                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, current_i_buffer);
-
-                var a_position = gl.getAttribLocation(shaderprogram, "a_position");
-                gl.vertexAttribPointer(a_position, 3, gl.FLOAT, false, 0, 0);
-                gl.enableVertexAttribArray(a_position);
-
-                var u_offset = gl.getUniformLocation(shaderprogram, "u_offset");
-                gl.uniform3fv(u_offset, current_offset);
-
-                var u_color = gl.getUniformLocation(shaderprogram, "u_color");
-                gl.uniform4fv(u_color, current_color);
-
-                //************************************************************//
-                //
-                // DRAW!
-                //
-
-                gl.drawElements(gl.TRIANGLES, 15, gl.UNSIGNED_BYTE, 0);
+                moveFish(fish);
+                drawBody(fish);
+                drawEye(fish);
             }
         }
     </script>
