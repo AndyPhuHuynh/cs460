@@ -28,6 +28,7 @@ let controls;
 let renderer;
 let anaglyph;
 let pane;
+let stats;
 
 const rotations = {};
 rotations.x_180 = new THREE.Quaternion(
@@ -82,6 +83,8 @@ const changeMatpatMaterial = (newMaterial) => {
 const animate = () => {
     requestAnimationFrame(animate);
     controls.update();
+    stats.update();
+
     if (sceneSettings.anaglyph) {
         anaglyph.render(scene, camera)
     } else {
@@ -171,7 +174,9 @@ window.onload = async () => {
 
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
+    stats = new Stats();
     document.body.appendChild(renderer.domElement)
+    document.body.appendChild(stats.domElement);
     anaglyph = new AnaglyphEffect(renderer);
 
     controls = new OrbitControls(camera, renderer.domElement);
